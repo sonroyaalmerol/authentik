@@ -4547,6 +4547,10 @@ paths:
       description: User Viewset
       parameters:
       - in: query
+        name: with_application
+        schema:
+          type: integer
+      - in: query
         name: attributes
         schema:
           type: string

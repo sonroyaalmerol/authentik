@@ -71,6 +71,7 @@ from authentik.core.middleware import (
 from authentik.core.models import (
     USER_ATTRIBUTE_TOKEN_EXPIRING,
     USER_PATH_SERVICE_ACCOUNT,
+    Application,
     AuthenticatedSession,
     Group,
     Token,
@@ -84,6 +85,7 @@ from authentik.flows.models import FlowToken
 from authentik.flows.planner import PLAN_CONTEXT_PENDING_USER, FlowPlanner
 from authentik.flows.views.executor import QS_KEY_TOKEN
 from authentik.lib.avatars import get_avatar
+from authentik.policies.engine import PolicyEngine
 from authentik.rbac.decorators import permission_required
 from authentik.rbac.models import get_permission_choices
 from authentik.stages.email.models import EmailStage
@@ -439,10 +441,33 @@ class UserViewSet(UsedByMixin, ModelViewSet):
     @extend_schema(
         parameters=[
             OpenApiParameter("include_groups", bool, default=True),
+            OpenApiParameter("with_application", int),
         ]
     )
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        queryset = self.get_queryset()
+
+        # Filter by application if provided
+        application_id = request.query_params.get("with_application")
+        if application_id:
+            try:
+                application = Application.objects.get(pk=application_id)
+                users_with_access = self._get_users_with_access_to_application(application)
+                queryset = queryset.filter(pk__in=[user.pk for user in users_with_access])
+            except Application.DoesNotExist as err:
+                raise ValidationError({"with_application": "Application not found"}) from err
+
+        return super().list(request, *args, queryset=queryset, **kwargs)
+
+    def _get_users_with_access_to_application(self, application):
+        """Retrieve users who have access to the specified application."""
+        users_with_access = []
+        for user in User.objects.all():
+            engine = PolicyEngine(application, user, self.request)
+            engine.build()
+            if engine.passing:
+                users_with_access.append(user)
+        return users_with_access
 
     def _create_recovery_link(self) -> tuple[str, Token]:
         """Create a recovery link (when the current brand has a recovery flow set),
